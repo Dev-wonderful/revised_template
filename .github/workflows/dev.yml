@@ -1,0 +1,61 @@
+name: Deploy to Dev
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types:
+      - completed
+    branches: [dev]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      # - name: Install sshpass
+      #   run: sudo apt-get install sshpass
+
+      - name: Fetch .env file from server
+        run: |
+          sshpass -p ${{ secrets.PASSWORD }} scp -o StrictHostKeyChecking=no ${{ secrets.USERNAME }}@${{ secrets.HOST }}:/var/www/aihomework/dev/.env .env
+        env:
+          SSH_HOST: ${{ secrets.HOST }}
+          SSH_USERNAME: ${{ secrets.USERNAME }}
+          SSH_PASSWORD: ${{ secrets.PASSWORD }}
+
+      - name: Build Docker images
+        run: |
+          docker compose --env-file .env -f docker-compose.yml build
+
+      - name: List Docker images
+        run: docker images
+
+      - name: Save Docker images to tarball
+        run: |
+          docker save hng_boilerplate_expressjs-backend:latest | gzip > dev-images.tar.gz
+
+      - name: Copy Docker images to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+          source: "dev-images.tar.gz"
+          target: "~/images-tar"
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+          script: |
+            cd ~/dev-deployment/hng_boilerplate_expressjs
+            git stash
+            git checkout dev
+            git pull
+            docker load -i ~/images-tar/dev-images.tar.gz
+            docker compose -f docker-compose.yml down
+            docker compose -f docker-compose.yml up -d
